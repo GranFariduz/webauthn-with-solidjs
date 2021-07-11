@@ -73,6 +73,47 @@ const getAttestationOptions = async (req, res) => {
   }
 }
 
+const getAttestationOptionsForExistingUser = async (req, res) => {
+  try {
+    const existingUser = await User.findOne({ _id: req.user._id })
+
+    if (!existingUser) {
+      return res.status(500).json({ success: false, message: 'User not found' })
+    }
+
+    let user = existingUser
+
+    const opts = {
+      rpName: 'WebAuthnSolidJS',
+      rpID: RP_ID,
+      userID: user._id,
+      userName: user.name,
+      timeout: 60000,
+      attestationType: 'indirect',
+      excludeCredentials: user.devices.map((device) => ({
+        id: device.credentialID,
+        type: 'public-key',
+        transports: ['internal']
+      })),
+      authenticatorSelection: {
+        userVerification: 'preferred',
+        requireResidentKey: false
+      }
+    }
+
+    const options = generateAttestationOptions(opts)
+
+    user.currentChallenge = options.challenge
+
+    await user.save()
+
+    res.status(200).json({ success: true, data: { attestationOptions: options } })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+}
+
 const verifyAttestation = async (req, res) => {
   try {
     const { userId, attestation } = req.body
@@ -99,18 +140,22 @@ const verifyAttestation = async (req, res) => {
         (device) => device.credentialID === credentialID
       )
 
-      if (!existingDevice) {
-        const newDevice = {
-          credentialID,
-          credentialPublicKey,
-          counter
-        }
-
-        user.devices.push(newDevice)
-        user.verifiedAtLeastOnce = true
-
-        await user.save()
+      if (existingDevice) {
+        return res
+          .status(500)
+          .json({ success: false, message: 'This authenticator already exists!' })
       }
+
+      const newDevice = {
+        credentialID,
+        credentialPublicKey,
+        counter
+      }
+
+      user.devices.push(newDevice)
+      user.verifiedAtLeastOnce = true
+
+      await user.save()
     }
 
     res.status(200).json({ success: true, data: verified })
@@ -220,5 +265,7 @@ module.exports = {
   getAttestationOptions,
   verifyAttestation,
   getAssertionOptions,
-  verifyAssertion
+  verifyAssertion,
+
+  getAttestationOptionsForExistingUser
 }
